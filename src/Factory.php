@@ -269,6 +269,11 @@ class Factory
         return self::configuration()->faker();
     }
 
+    final public static function delayFlush(callable $callback): void
+    {
+        self::configuration()->delayFlush($callback);
+    }
+
     /**
      * @internal
      *
@@ -458,7 +463,13 @@ class Factory
             return false;
         }
 
+        if ($classMetadata instanceof ORMClassMetadata && $classMetadata->isEmbeddedClass) {
+            // embedded entity
+            return false;
+        }
+
         if ($classMetadata instanceof ODMClassMetadata && $classMetadata->isEmbeddedDocument) {
+            // embedded document
             return false;
         }
 

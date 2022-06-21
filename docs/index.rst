@@ -195,21 +195,30 @@ This command will generate a ``PostFactory`` class that looks like this:
 
     Using ``make:factory --test`` will generate the factory in ``tests/Factory``.
 
-.. tip::
+.. note::
 
-    PhpStorm 2021.2+ has support for
-    `generics annotations <https://blog.jetbrains.com/phpstorm/2021/07/phpstorm-2021-2-release/#generics>`_,
-    with it, your factory's annotations can be reduced to the following and still have the same auto-completion
-    support:
+    The generated ``@method`` docblocks above enable autocompletion with PhpStorm but
+    cause errors with PHPStan. To support PHPStan for your factory's, you need to *also*
+    add the following dockblocks:
 
     .. code-block:: php
 
         /**
-         * @extends ModelFactory<Post>
+         * ...
          *
-         * @method static Post[]|Proxy[] createMany(int $number, array|callable $attributes = [])
-         * @method static PostRepository|RepositoryProxy repository()
-         * @method Post|Proxy create(array|callable $attributes = [])
+         * @phpstan-method static Post&Proxy createOne(array $attributes = [])
+         * @phpstan-method static Post[]&Proxy[] createMany(int $number, array|callable $attributes = [])
+         * @phpstan-method static Post&Proxy find(object|array|mixed $criteria)
+         * @phpstan-method static Post&Proxy findOrCreate(array $attributes)
+         * @phpstan-method static Post&Proxy first(string $sortedField = 'id')
+         * @phpstan-method static Post&Proxy last(string $sortedField = 'id')
+         * @phpstan-method static Post&Proxy random(array $attributes = [])
+         * @phpstan-method static Post&Proxy randomOrCreate(array $attributes = [])
+         * @phpstan-method static Post[]&Proxy[] all()
+         * @phpstan-method static Post[]&Proxy[] findBy(array $attributes)
+         * @phpstan-method static Post[]&Proxy[] randomSet(int $number, array $attributes = [])
+         * @phpstan-method static Post[]&Proxy[] randomRange(int $min, int $max, array $attributes = [])
+         * @phpstan-method Post&Proxy create(array|callable $attributes = [])
          */
         final class PostFactory extends ModelFactory
         {
@@ -864,6 +873,22 @@ Foundry can be used to create factories for entities that you don't have model f
     // convenience functions
     $entity = create(Post::class, ['field' => 'value']);
     $entities = create_many(Post::class, 5, ['field' => 'value']);
+
+Delay Flush
+~~~~~~~~~~~
+
+When creating/persisting many factories at once, it can be improve performance
+to instantiate them all without saving to the database, then flush them all at
+once. To do this, wrap the operations in a ``Factory::delayFlush()`` callback:
+
+.. code-block:: php
+
+    use Zenstruck\Foundry\Factory;
+
+    Factory::delayFlush(function() {
+        CategoryFactory::createMany(100); // instantiated/persisted but not flushed
+        TagFactory::createMany(200); // instantiated/persisted but not flushed
+    }); // single flush
 
 .. _without-persisting:
 
@@ -1645,10 +1670,10 @@ Another feature of *stories* is the ability for them to *remember* the objects t
     {
         public function build(): void
         {
-            $this->add('php', CategoryFactory::createOne(['name' => 'php']));
+            $this->addState('php', CategoryFactory::createOne(['name' => 'php']));
 
             // factories are created when added as state
-            $this->add('symfony', CategoryFactory::new(['name' => 'symfony']));
+            $this->addState('symfony', CategoryFactory::new(['name' => 'symfony']));
         }
     }
 
@@ -1656,7 +1681,9 @@ Later, you can access the story's state when creating other fixtures:
 
 .. code-block:: php
 
-    PostFactory::createOne(['category' => CategoryStory::load()->get('php')]);
+    PostFactory::createOne([
+        'category' => CategoryStory::load()->get('php') // Category Proxy
+    ]);
 
     // or use the magic method (functionally equivalent to above)
     PostFactory::createOne(['category' => CategoryStory::php()]);
@@ -1664,6 +1691,47 @@ Later, you can access the story's state when creating other fixtures:
 .. note::
 
     Story state is cleared after each test (unless it is a :ref:`Global State Story <global-state>`).
+
+Story Pools
+^^^^^^^^^^^
+
+Stories can store (as state) *pools* of objects:
+
+.. code-block:: php
+
+    // src/Story/ProvinceStory.php
+
+    namespace App\Story;
+
+    use App\Factory\ProvinceFactory;
+    use Zenstruck\Foundry\Story;
+
+    final class ProvinceStory extends Story
+    {
+        public function build(): void
+        {
+            // add collection to a "pool"
+            $this->addToPool('be', ProvinceFactory::createMany(5, ['country' => 'BE']));
+
+            // equivalent to above
+            $this->addToPool('be', ProvinceFactory::new(['country' => 'BE'])->many(5));
+
+            // add single object to a pool
+            $this->addToPool('be', ProvinceFactory::createOne(['country' => 'BE']));
+
+            // add single object to single pool and make available as "state"
+            $this->addState('be-1', ProvinceFactory::createOne(['country' => 'BE']), 'be');
+        }
+    }
+
+Objects can be fetched from pools in your tests, fixtures or other stories:
+
+.. code-block:: php
+
+    ProvinceStory::getRandom('be'); // random Province|Proxy from "be" pool
+    ProvinceStory::getRandomSet('be', 3); // 3 random Province|Proxy's from "be" pool
+    ProvinceStory::getRandomRange('be', 1, 4); // between 1 and 4 random Province|Proxy's from "be" pool
+    ProvinceStory::getPool('be'); // all Province|Proxy's from "be" pool
 
 Bundle Configuration
 --------------------
